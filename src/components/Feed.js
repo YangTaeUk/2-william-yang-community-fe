@@ -1,203 +1,241 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
+  Box,
   Card,
-  CardMedia,
   CardContent,
+  CardMedia,
   Typography,
   Avatar,
-  Box,
   Button,
+  CircularProgress,
+  Fab,
   IconButton,
   TextField,
 } from '@mui/material';
-import { FavoriteBorder, ChatBubbleOutline, MoreHoriz, OpenInNew } from '@mui/icons-material';
-import FeedDetailModal from './FeedDetailModal';
-
-const sampleData = [
-  {
-    id: 1,
-    username: 'hyezi0801',
-    profileImage: 'https://via.placeholder.com/50',
-    feedImage: 'https://via.placeholder.com/500',
-    caption: '비숑컷 어뗘네ㅋ 🐶',
-    likes: 2332,
-    comments: [
-      { id: 1, username: 'user1', text: '너무 귀여워요!' },
-      { id: 2, username: 'user2', text: '저도 비숑 키우고 싶어요!' },
-    ],
-    timestamp: new Date().getTime() - 10 * 60 * 1000, // 10분 전
-  },
-  {
-    id: 2,
-    username: 'john_doe',
-    profileImage: 'https://via.placeholder.com/50',
-    feedImage: 'https://via.placeholder.com/500',
-    caption: 'Beautiful day in the park!',
-    likes: 1450,
-    comments: [
-      { id: 1, username: 'user3', text: '멋진 사진이네요!' },
-      { id: 2, username: 'user4', text: '풍경이 정말 예뻐요.' },
-    ],
-    timestamp: new Date().getTime() - 45 * 60 * 1000, // 45분 전
-  },
-  // 데이터 추가 가능
-];
+import AddIcon from '@mui/icons-material/Add';
+import MoreVertIcon from '@mui/icons-material/MoreVert';
+import { useNavigate } from 'react-router-dom';
+import FeedDetailModal from './FeedDetailModal'; // ✅ 기존 모달 활용
 
 const Feed = () => {
-  const [feeds, setFeeds] = useState([]);
-  const [page, setPage] = useState(1);
-  const [commentInputs, setCommentInputs] = useState({}); // 각 게시물의 댓글 입력값 저장
-  const [selectedFeed, setSelectedFeed] = useState(null); // 선택된 피드
-  const [modalOpen, setModalOpen] = useState(false);
-  const feedsPerPage = 5;
+  const navigate = useNavigate();
+  const [posts, setPosts] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [selectedPost, setSelectedPost] = useState(null);
+  const [open, setOpen] = useState(false); // ✅ 모달 상태
+  const observer = useRef();
+  const hasFetched = useRef(false);
+  const [commentInputs, setCommentInputs] = useState({}); // ✅ 댓글 입력 상태 관리
 
-  const loadMoreFeeds = () => {
-    const newFeeds = sampleData.slice(
-      (page - 1) * feedsPerPage,
-      page * feedsPerPage
-    );
-    setFeeds((prevFeeds) => [...prevFeeds, ...newFeeds]);
+  // ✅ 게시글 불러오기
+  const fetchPosts = async (page = 1) => {
+    if (loading) return;
+    setLoading(true);
+
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`http://localhost:4000/api/posts?page=${page}`, {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (!response.ok) throw new Error("데이터 불러오기 실패");
+
+      const data = await response.json();
+
+      // ✅ comments가 없으면 빈 배열 추가
+      const updatedPosts = data.posts.map((post) => ({
+        ...post,
+        comments: post.comments || [],
+      }));
+
+      setPosts((prevPosts) => [...prevPosts, ...updatedPosts]);
+
+      if (!Array.isArray(data.posts)) {
+        return;
+      }
+      setTotalPages(data.totalPages);
+      setCurrentPage(data.currentPage);
+    } catch (error) {
+      console.error("🚨 fetchPosts 오류:", error);
+      alert(error.message);
+    } finally {
+      setLoading(false);
+    }
   };
 
+  // ✅ 무한 스크롤 (Intersection Observer)
+  const lastPostRef = useCallback(
+    (node) => {
+      if (loading) return;
+      if (observer.current) observer.current.disconnect();
+
+      observer.current = new IntersectionObserver((entries) => {
+        if (entries[0].isIntersecting && currentPage < totalPages) {
+          fetchPosts(currentPage + 1);
+        }
+      });
+
+      if (node) observer.current.observe(node);
+    },
+    [loading, currentPage, totalPages]
+  );
+
+  // ✅ 페이지 첫 로딩 시 초기 데이터 가져오기
   useEffect(() => {
-    loadMoreFeeds();
-  }, [page]);
+    if (!hasFetched.current) {
+      fetchPosts(1);
+      hasFetched.current = true;
+    }
+  }, []);
 
-  const handleOpenModal = (feed) => {
-    setSelectedFeed(feed);
-    setModalOpen(true);
+  // ✅ 날짜 포맷 변환 함수
+  const formatDate = (isoString) => {
+    const date = new Date(isoString);
+    return date.toLocaleString();
   };
 
-  const handleCloseModal = () => {
-    setSelectedFeed(null);
-    setModalOpen(false);
+  // ✅ 피드 상세보기 모달 열기
+  const handleOpen = (post) => {
+    if (!post || typeof post !== "object") {
+      return;
+    }
+
+    setSelectedPost(post); // ✅ 상태 업데이트
   };
 
-  const formatTime = (timestamp) => {
-    const now = new Date().getTime();
-    const diffMinutes = Math.floor((now - timestamp) / (1000 * 60));
-    if (diffMinutes < 60) return `${diffMinutes}분 전`;
-    const diffHours = Math.floor(diffMinutes / 60);
-    return `${diffHours}시간 전`;
+  // ✅ `useEffect`를 사용하여 `selectedPost`가 변경된 후 `open`을 true로 설정
+  useEffect(() => {
+    if (selectedPost) {
+      setOpen(true);
+    }
+  }, [selectedPost]);
+
+  // ✅ 피드 상세보기 모달 닫기
+  const handleClose = () => {
+    setSelectedPost(null);
+    setOpen(false);
   };
 
-  const handleCommentChange = (feedId, value) => {
-    setCommentInputs((prev) => ({
-      ...prev,
-      [feedId]: value,
-    }));
+  // ✅ 댓글 입력 필드 변경 핸들러
+  const handleCommentChange = (postId, value) => {
+    setCommentInputs((prev) => ({ ...prev, [postId]: value }));
   };
 
-  const handleAddComment = (feedId) => {
-    const newComment = {
-      id: Math.random(), // 임의의 고유 ID 생성
-      username: '현재유저', // 현재 유저명 (예: 로그인 사용자)
-      text: commentInputs[feedId] || '',
-    };
+  // ✅ 댓글 제출 핸들러
+  const handleCommentSubmit = async (postId) => {
+    const commentContent = commentInputs[postId]?.trim();
+    if (!commentContent) return;
 
-    if (!newComment.text.trim()) return; // 빈 댓글은 추가하지 않음
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`http://localhost:4000/api/comments/${postId}`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ content: commentContent }),
+      });
 
-    setFeeds((prevFeeds) =>
-      prevFeeds.map((feed) =>
-        feed.id === feedId
-          ? { ...feed, comments: [...feed.comments, newComment] }
-          : feed
-      )
-    );
+      if (!response.ok) throw new Error('댓글 등록 실패');
 
-    setCommentInputs((prev) => ({ ...prev, [feedId]: '' })); // 입력 필드 초기화
+      const newComment = await response.json();
+
+      // ✅ 새로운 댓글을 추가하고 상태 업데이트
+      setPosts((prevPosts) =>
+        prevPosts.map((post) =>
+          post.id === postId
+            ? { ...post, comments: [...(post.comments || []), newComment] }
+            : post
+        )
+      );
+
+      // ✅ 입력 필드 초기화
+      setCommentInputs((prev) => ({ ...prev, [postId]: '' }));
+    } catch (error) {
+      alert(error.message);
+    }
   };
 
   return (
-    <Box sx={{ maxWidth: 600, margin: 'auto', mt: 4 }}>
-      {feeds.map((feed) => (
-        <Card key={feed.id} sx={{ mb: 2 }}>
-          {/* 유저 정보 */}
-          <Box sx={{ display: 'flex', alignItems: 'center', p: 2, justifyContent: 'space-between' }}>
+    <Box sx={{ maxWidth: '600px', margin: '0 auto', mt: 4, position: 'relative' }}>
+      <Typography variant="h5" sx={{ mb: 3, fontWeight: 'bold' }}>
+        최신 피드
+      </Typography>
+
+      {/* ✅ 글 작성 버튼 */}
+      <Fab
+        color="primary"
+        sx={{ position: 'fixed', bottom: 20, right: 20 }}
+        onClick={() => navigate('/feed/create')}
+      >
+        <AddIcon />
+      </Fab>
+
+      {/* ✅ 게시글이 없을 경우 */}
+      {!loading && posts.length === 0 && (
+        <Typography sx={{ textAlign: 'center', color: 'gray', my: 5 }}>
+          게시글이 없습니다.
+        </Typography>
+      )}
+
+      {/* ✅ 게시글 리스트 */}
+      {posts.map((post, index) => (
+        <Card key={post.id} sx={{ mb: 3, p: 2, position: 'relative' }}>
+          {/* ✅ 피드 상단 (프로필 정보 + 상세보기 아이콘) */}
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
             <Box sx={{ display: 'flex', alignItems: 'center' }}>
-              <Avatar src={feed.profileImage} alt={feed.username} />
+              <Avatar>{post.author.username[0].toUpperCase()}</Avatar>
               <Box sx={{ ml: 2 }}>
                 <Typography variant="subtitle1" sx={{ fontWeight: 'bold' }}>
-                  {feed.username}
+                  {post.author.username}
                 </Typography>
                 <Typography variant="caption" color="text.secondary">
-                  {formatTime(feed.timestamp)}
+                  {formatDate(post.createdAt)}
                 </Typography>
               </Box>
             </Box>
-            <Box>
-              <IconButton>
-                <MoreHoriz />
-              </IconButton>
-              <IconButton onClick={() => handleOpenModal(feed)}>
-                <OpenInNew />
-              </IconButton>
-            </Box>
-            </Box>
-          {/* 게시물 이미지 */}
-          <CardMedia
-            component="img"
-            height="500"
-            image={feed.feedImage}
-            alt={feed.caption}
-          />
-          {/* 캡션 및 정보 */}
+            <IconButton onClick={() => handleOpen(post)}>
+              <MoreVertIcon />
+            </IconButton>
+          </Box>
+
           <CardContent>
-            <Typography variant="body1" sx={{ mb: 1 }}>
-              {feed.caption}
+            <Typography variant="h6">{post.title}</Typography>
+            <Typography variant="body2" sx={{ mt: 1, color: 'text.secondary' }}>
+              {post.content}
             </Typography>
-            {/* 좋아요 및 댓글 아이콘 */}
-            <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
-              <IconButton>
-                <FavoriteBorder />
-              </IconButton>
-              <IconButton>
-                <ChatBubbleOutline />
-              </IconButton>
-            </Box>
-            {/* 좋아요 및 댓글 수 */}
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-              좋아요 {feed.likes.toLocaleString()}개
-            </Typography>
-            {/* 댓글 표시 */}
-            {feed.comments.map((comment) => (
-              <Typography variant="body2" key={comment.id} sx={{ mb: 0.5 }}>
-                <strong>{comment.username}</strong> {comment.text}
-              </Typography>
-            ))}
-            {/* 댓글 추가 입력 */}
-            <Box sx={{ display: 'flex', mt: 2 }}>
-              <TextField
-                fullWidth
-                variant="outlined"
-                size="small"
-                placeholder="댓글 추가..."
-                value={commentInputs[feed.id] || ''}
-                onChange={(e) => handleCommentChange(feed.id, e.target.value)}
-              />
-              <Button
-                variant="contained"
-                color="primary"
-                sx={{ ml: 1 }}
-                onClick={() => handleAddComment(feed.id)}
-              >
-                추가
-              </Button>
-            </Box>
           </CardContent>
+
+          {/* ✅ 댓글 표시 (최대 2개) */}
+          <Box sx={{ mt: 2, px: 1 }}>
+            {post.comments.length > 0 ? (
+              post.comments.slice(0, 2).map((comment) => (
+                <Typography key={comment.id} variant="body2">
+                  <b>{comment.author.username}</b>: {comment.content}
+                </Typography>
+              ))
+            ) : (
+              <Typography variant="body2" color="text.secondary">
+                댓글 없음
+              </Typography>
+            )}
+            {post.comments.length > 2 && (
+              <Button size="small" onClick={() => handleOpen(post)}>
+                더 보기
+              </Button>
+            )}
+          </Box>
         </Card>
       ))}
-      {/* 더보기 버튼 */}
-      <Button
-        variant="contained"
-        color="primary"
-        onClick={() => setPage((prev) => prev + 1)}
-        sx={{ width: '100%', mt: 2 }}
-      >
-        더 보기
-      </Button>
-      <FeedDetailModal open={modalOpen} handleClose={handleCloseModal} feed={selectedFeed} />
-    
+
+      {/* ✅ 피드 상세 모달 (기존 `FeedDetailModal.js` 활용) */}
+      {selectedPost && (
+        <FeedDetailModal open={open} handleClose={handleClose} feed={selectedPost} />
+      )}
     </Box>
   );
 };
